@@ -16,7 +16,8 @@ module ActiveMerchant
         :rates => 'ups.app/xml/Rate',
         :track => 'ups.app/xml/Track',
         :ship_confirm => 'ups.app/xml/ShipConfirm',
-        :ship_accept => 'ups.app/xml/ShipAccept'
+        :ship_accept => 'ups.app/xml/ShipAccept',
+        :cancel_shipment => 'ups.app/xml/Void'
       }
 
       PICKUP_CODES = HashWithIndifferentAccess.new(
@@ -161,7 +162,28 @@ module ActiveMerchant
 
         rescue RuntimeError => e
           raise "Could not obtain shipping label. #{e.message}."
+        end
+      end
 
+      def cancel_shipment(shipment_identification_number, package_tracking_numbers, options = {})
+        options = @options.merge(options)
+        packages = Array(package_tracking_numbers)
+        access_request = build_access_request
+
+        begin
+          cancel_request = build_cancel_shipment_request(shipment_identification_number, package_tracking_numbers, options)
+          logger.debug(cancel_request) if logger
+
+          cancel_response = commit(:void_confirm, save_request(access_request + cancel_request), (options[:test] || false))
+          logger.debug(void_response) if logger
+
+          response_xml = parse_cancel_shipment_response(cancel_response)
+
+          success = response_success?(xml)
+          message = response_message(xml)
+          raise message unless success
+        rescue RuntimeError => e
+          raise "Exception canceling shipment. #{e.message}."
         end
       end
 
@@ -322,13 +344,42 @@ module ActiveMerchant
           end
           # I don't know all of the options that UPS supports for labels
           # so I'm going with something very simple for now.
+          # TODO: investigate UPS label options
           root_node        << XmlNode.new('LabelSpecification') do |specification|
             specification  << XmlNode.new('LabelPrintMethod') do |print_method|
               print_method << XmlNode.new('Code', 'GIF')
             end
-            specification  << XmlNode.new('HTTPUserAgent', 'Mozilla/4.5') # hmmm
+            specification  << XmlNode.new('HTTPUserAgent', 'Mozilla/4.5') # TODO: which HTTPUserAgent to use
             specification  << XmlNode.new('LabelImageFormat', 'GIF') do |image_format|
               image_format << XmlNode.new('Code', 'GIF')
+            end
+          end
+        end
+        xml_request.to_s
+      end
+
+      # Build XML node to cancel a shipping label for the given shipment.
+      #
+      def build_cancel_shipment_request(shipment_identification_number, package_tracking_numbers, options = {})
+        xml_request = XmlNode.new('VoidShipmentRequest') do |root_node|
+          root_node << XmlNode.new('Request') do |request|
+            # Required element and the text must be "Void"
+            request << XmlNode.new('RequestAction', 'Void')
+            request << XmlNode.new('RequestOption')
+            # Optional element to identify transactions between client and server.
+            if options[:customer_context]
+              request << XmlNode.new('TransactionReference') do |refer|
+                refer << XmlNode.new('CustomerContext', options[:customer_context])
+              end
+            end
+          end
+          root_node   << XmlNode.new('VoidShipment') do |shipment|
+            # Required element.
+            shipment << XmlNode.new('ShipmentIdentificationNumber', shipment_identification_number)
+
+            # A request may specify multiple packages.
+            package_tracking_numbers.each do |package_tracking_number|
+              shipment << XmlNode.new('TrackingNumber', package_tracking_number)
             end
           end
         end
@@ -620,6 +671,34 @@ module ActiveMerchant
         message = response_message(xml)
 
         LabelResponse.new(success, message, Hash.from_xml(response).values.first)
+      end
+
+      # sample cancel (void) shipment response
+=begin
+      <?xml version="1.0" ?>
+      <VoidShipmentResponse>
+        <Response>
+          <TransactionReference>
+            <CustomerContext>Customer Transaction ID</CustomerContext>
+            <XpciVersion>1.0001</XpciVersion>
+          </TransactionReference>
+          <ResponseStatusCode>1</ResponseStatusCode>
+          <ResponseStatusDescription>Success</ResponseStatusDescription>
+        </Response>
+        <Status>
+          <StatusType>
+            <Code>1</Code>
+            <Description>Success</Description>
+          </StatusType>
+          <StatusCode>
+            <Code>1</Code>
+            <Description>Success</Description>
+          </StatusCode>
+        </Status>
+      </VoidShipmentResponse>
+=end
+      def parse_cancel_shipment_response(response)
+        REXML::Document.new(response)
       end
 
       def commit(action, request, test = false)
