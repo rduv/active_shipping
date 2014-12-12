@@ -170,17 +170,19 @@ module ActiveMerchant
         packages = Array(package_tracking_numbers)
         access_request = build_access_request
 
+        # logger = Logger.new(STDOUT)
+
         begin
           cancel_request = build_cancel_shipment_request(shipment_identification_number, package_tracking_numbers, options)
           logger.debug(cancel_request) if logger
 
-          cancel_response = commit(:void_confirm, save_request(access_request + cancel_request), (options[:test] || false))
-          logger.debug(void_response) if logger
+          cancel_response = commit(:cancel_shipment, save_request("<?xml version=\"1.0\"?>" + access_request + "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>" + cancel_request), (options[:test] || false))
+          logger.debug(cancel_response) if logger
 
           response_xml = parse_cancel_shipment_response(cancel_response)
 
-          success = response_success?(xml)
-          message = response_message(xml)
+          success = response_success?(response_xml)
+          message = response_message(response_xml)
           raise message unless success
         rescue RuntimeError => e
           raise "Exception canceling shipment. #{e.message}."
@@ -366,14 +368,13 @@ module ActiveMerchant
             # Required element and the text must be "Void"
             request << XmlNode.new('RequestAction', 'Void')
             request << XmlNode.new('RequestOption')
-            # Optional element to identify transactions between client and server.
-            if options[:customer_context]
-              request << XmlNode.new('TransactionReference') do |refer|
-                refer << XmlNode.new('CustomerContext', options[:customer_context])
-              end
+            # Required element to identify transactions between client and server.
+            request << XmlNode.new('TransactionReference') do |refer|
+              # Optional element to identify transactions between client and server.
+              refer << XmlNode.new('CustomerContext', options[:customer_context])
             end
           end
-          root_node   << XmlNode.new('VoidShipment') do |shipment|
+          root_node   << XmlNode.new('ExpandedVoidShipment') do |shipment|
             # Required element.
             shipment << XmlNode.new('ShipmentIdentificationNumber', shipment_identification_number)
 
