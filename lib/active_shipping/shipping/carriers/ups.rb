@@ -132,6 +132,7 @@ module ActiveMerchant
         access_request = build_access_request
 
         begin
+          # logger = Logger.new(STDOUT)
 
           # STEP 1: Confirm.  Validation step, important for verifying price.
           confirm_request = build_shipment_request(origin, destination, packages, options)
@@ -300,7 +301,9 @@ module ActiveMerchant
             # Required element.
             shipment  << XmlNode.new('Service') do |service|
               service << XmlNode.new('Code', options[:service_code] || '14')
-              service << XmlNode.new('Description', options[:service_description] || 'Next Day Air Early AM')
+              if options[:service_description]
+                service << XmlNode.new('Description', options[:service_description])
+              end
             end
             # Required element. The delivery destination.
             shipment  << build_location_node('ShipTo', destination, {})
@@ -461,7 +464,7 @@ module ActiveMerchant
           #                   * Shipment/Package/Description element
 
           package_node << XmlNode.new("PackagingType") do |packaging_type|
-            packaging_type << XmlNode.new("Code", '02')
+            packaging_type << XmlNode.new("Code", package.package_type || '02')
           end
 
           package_node << XmlNode.new("Dimensions") do |dimensions|

@@ -122,10 +122,15 @@ module ActiveMerchant #:nodoc:
         @gift = options[:gift] ? true : false
         @oversized = options[:oversized] ? true : false
         @unpackaged = options[:unpackaged] ? true : false
+        @package_type = options[:package_type]
       end
 
       def unpackaged?
         @unpackaged
+      end
+
+      def package_type
+        @package_type
       end
 
       def oversized?
