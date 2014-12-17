@@ -158,7 +158,78 @@ module ActiveMerchant
         parse_tracking_response(response, options)
       end
 
+      def cancel_shipment(shipment_identification_number, package_tracking_numbers, options = {})
+        options = @options.merge(options)
+        packages = Array(package_tracking_numbers)
+
+=begin
+        From FedExWebServicesDeveloperGuide_v2014.pdf:
+        Determines the type of deletion to be performed in relation to package level versus shipment level.
+
+        Valid options are:
+         DELETE_ALL_PACKAGES
+         DELETE_ENTIRE_CONSOLIDATION
+         DELETE_ONE_PACKAGE
+         LEGACY
+=end
+        deletion_control = options[:deletion_control] || 'DELETE_ALL_PACKAGES'
+
+        logger = Logger.new(STDOUT)
+
+        begin
+          cancel_request = build_cancel_shipment_request(shipment_identification_number, package_tracking_numbers, deletion_control, options)
+          logger.debug(cancel_request) if logger
+
+          cancel_response = commit(save_request(cancel_request), (options[:test] || false))
+          logger.debug(cancel_response) if logger
+
+          response_xml = parse_cancel_shipment_response(cancel_response)
+
+          if response_xml.root.elements["v13:HighestSeverity"] && response_xml.root.elements["v13:HighestSeverity"].text == "SUCCESS"
+            return
+          end
+
+          errorLogger = Logger.new(STDERR)
+
+          errorLogger.error "Exception processing FedEx cancel request: "+cancel_request+", with response: "+cancel_response
+
+          if response_xml.root.elements["v13:HighestSeverity"] && response_xml.root.elements["v13:HighestSeverity"].text == "NOTE"
+            message = response_xml.root.elements["v13:Notifications"].elements["v13:Message"].text
+          elsif response_xml.root.elements["detail"]
+            message = response_xml.root.elements["detail"].to_s
+          end
+
+          message || message = "Unexpected processing error occurred"
+
+          raise message
+        rescue RuntimeError => e
+          raise "Exception canceling shipment. #{e.message}."
+        end
+      end
+
       protected
+
+      # Build XML node to cancel a shipping label for the given shipment.
+      #
+      def build_cancel_shipment_request(shipment_identification_number, package_tracking_numbers, deletion_control, options = {})
+        xml_request = XmlNode.new('DeleteShipmentRequest', 'xmlns' => 'http://fedex.com/ws/ship/v13') do |root_node|
+          root_node << build_request_header
+          root_node << build_version_node("ship")
+
+          root_node << XmlNode.new('TrackingId') do |shipment|
+            # Required element.
+            shipment << XmlNode.new('TrackingIdType', "FEDEX")
+            shipment << XmlNode.new('TrackingNumber', shipment_identification_number)
+          end
+
+          root_node << XmlNode.new('DeletionControl', deletion_control)
+        end
+        xml_request.to_s
+      end
+
+      def parse_cancel_shipment_response(response)
+        REXML::Document.new(response)
+      end
 
       def build_rate_request(origin, destination, packages, options = {})
         imperial = %w(US LR MM).include?(origin.country_code(:alpha2))
@@ -263,9 +334,9 @@ module ActiveMerchant
         end
       end
 
-      def build_version_node
+      def build_version_node(service_id = 'crs')
         XmlNode.new('Version') do |version_node|
-          version_node << XmlNode.new('ServiceId', 'crs')
+          version_node << XmlNode.new('ServiceId', service_id)
           version_node << XmlNode.new('Major', '13')
           version_node << XmlNode.new('Intermediate', '0')
           version_node << XmlNode.new('Minor', '0')
